@@ -1,90 +1,105 @@
-import streamlit as st
 import os
-import pandas as pd
-from datetime import datetime
+from flask import Flask, render_template_string, request, redirect, url_for, send_from_directory
+from waitress import serve
 
-# Настройка страницы в стиле Wide (широкий экран)
-st.set_page_config(page_title="StreamTube", page_icon="🎬", layout="wide")
+app = Flask(__name__)
 
-# Создаем папку для хранения видео, если её нет
-SAVE_DIR = "uploaded_videos"
-if not os.path.exists(SAVE_DIR):
-    os.makedirs(SAVE_DIR)
+# Настройки папок
+UPLOAD_FOLDER = 'uploads'
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-# Кастомный CSS для "YouTube" стиля
-st.markdown("""
+# "База данных" в памяти (для примера)
+videos = []
+
+# --- HTML ШАБЛОН (YouTube Style) ---
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PythonTube</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-    .main {
-        background-color: #0f0f0f;
-        color: white;
-    }
-    .stApp {
-        background-color: #0f0f0f;
-    }
-    h1, h2, h3, p {
-        color: white !important;
-    }
-    .video-card {
-        background-color: #1e1e1e;
-        border-radius: 12px;
-        padding: 10px;
-        margin-bottom: 20px;
-        transition: 0.3s;
-    }
-    .video-card:hover {
-        background-color: #2e2e2e;
-    }
-    .stSidebar {
-        background-color: #0f0f0f !important;
-        border-right: 1px solid #333;
-    }
+        body { background-color: #0f0f0f; color: white; font-family: Roboto, Arial, sans-serif; }
+        .navbar { background-color: #0f0f0f; border-bottom: 1px solid #333; }
+        .card { background-color: transparent; border: none; transition: 0.3s; }
+        .card-title { font-size: 1rem; font-weight: 500; margin-top: 10px; color: white; }
+        .video-thumbnail { border-radius: 12px; width: 100%; aspect-ratio: 16/9; object-fit: cover; background: #222; }
+        .upload-section { background: #1e1e1e; padding: 20px; border-radius: 15px; margin-bottom: 30px; }
+        input, .form-control { background: #222 !important; border: 1px solid #444 !important; color: white !important; }
+        .btn-primary { background-color: #cc0000; border: none; border-radius: 20px; padding: 8px 20px; }
+        .btn-primary:hover { background-color: #ff0000; }
     </style>
-    """, unsafe_allow_html=True)
+</head>
+<body>
+    <nav class="navbar sticky-top mb-4">
+        <div class="container-fluid">
+            <a class="navbar-brand text-white fw-bold" href="/">🎬 PythonTube</a>
+        </div>
+    </nav>
 
-# Инициализация "базы данных" в сессии
-if 'video_db' not in st.session_state:
-    st.session_state.video_db = []
+    <div class="container">
+        <div class="upload-section">
+            <h5>Загрузить новое видео</h5>
+            <form action="/upload" method="post" enctype="multipart/form-data" class="row g-3">
+                <div class="col-md-5">
+                    <input type="text" name="title" class="form-control" placeholder="Название видео" required>
+                </div>
+                <div class="col-md-5">
+                    <input type="file" name="video" class="form-control" accept="video/*" required>
+                </div>
+                <div class="col-md-2">
+                    <button type="submit" class="btn btn-primary w-100">Опубликовать</button>
+                </div>
+            </form>
+        </div>
 
-# --- САЙДБАР (Навигация и загрузка) ---
-with st.sidebar:
-    st.title("🎬 StreamTube")
-    st.write("Твой личный видеохостинг")
-    st.divider()
+        <h4 class="mb-4">Рекомендации</h4>
+        <div class="row row-cols-1 row-cols-md-3 row-cols-lg-4 g-4">
+            {% for video in videos %}
+            <div class="col">
+                <div class="card h-100">
+                    <video class="video-thumbnail" controls>
+                        <source src="/uploads/{{ video.filename }}" type="video/mp4">
+                    </video>
+                    <div class="card-body p-0">
+                        <h5 class="card-title">{{ video.title }}</h5>
+                        <p class="text-secondary small">Опубликовано только что</p>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+# --- МАРШРУТЫ (Routes) ---
+
+@app.route('/')
+def index():
+    return render_template_string(HTML_TEMPLATE, videos=videos)
+
+@app.route('/upload', methods=['POST'])
+def upload():
+    title = request.form.get('title')
+    file = request.files.get('video')
     
-    st.subheader("Загрузить видео")
-    new_title = st.text_input("Название видео", placeholder="Как я провел лето...")
-    uploaded_file = st.file_uploader("Выберите файл", type=["mp4", "mov", "avi"])
+    if file and title:
+        filename = file.filename
+        file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+        videos.append({'title': title, 'filename': filename})
     
-    if st.button("Опубликовать", use_container_width=True):
-        if uploaded_file and new_title:
-            file_path = os.path.join(SAVE_DIR, uploaded_file.name)
-            with open(file_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
-            
-            # Добавляем в список
-            st.session_state.video_db.append({
-                "title": new_title,
-                "path": file_path,
-                "date": datetime.now().strftime("%d.%m.%Y")
-            })
-            st.success("Видео успешно загружено!")
-        else:
-            st.error("Введите название и выберите файл")
+    return redirect(url_for('index'))
 
-# --- ГЛАВНАЯ СТРАНИЦА ---
-st.title("Рекомендации")
+@app.route('/uploads/<filename>')
+def uploaded_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
-if not st.session_state.video_db:
-    st.info("Пока здесь пусто. Загрузи первое видео через боковое меню! 👈")
-else:
-    # Отображение сеткой (Grid)
-    cols = st.columns(3) # 3 колонки как на YouTube Desktop
-    
-    for idx, video in enumerate(st.session_state.video_db):
-        with cols[idx % 3]:
-            # Контейнер для видео
-            with st.container():
-                st.video(video['path'])
-                st.subheader(video['title'])
-                st.caption(f"📅 Опубликовано: {video['date']}")
-                st.write("---")
+# --- ЗАПУСК ЧЕРЕЗ WAITRESS ---
+if __name__ == '__main__':
+    print("🚀 Сервер запущен на http://localhost:8080")
+    serve(app, host='0.0.0.0', port=8080)
